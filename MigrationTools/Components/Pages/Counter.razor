@@ -1,0 +1,222 @@
+﻿@page "/counter"
+@using Azure.Storage.Blobs
+@using Microsoft.SharePoint.Client
+@using PnP.Core.Services
+@using PnP.Framework
+@using System.Web
+@using System.Security.Cryptography
+@rendermode InteractiveServer
+
+@inject IPnPContextFactory PnPContextFactory
+
+<PageTitle>Counter</PageTitle>
+
+<h1>Counter</h1>
+
+@if (context == null)
+{
+    <input @bind="inputText" type="text" placeholder="Tenant name" />
+    <button class="btn btn-primary" @onclick="Authenticate">Authenticate</button>
+}
+else
+{
+
+    <button class="btn btn-primary" @onclick="StartMigration">Start</button>
+}
+
+@if (containersInfo != null)
+{
+    <br />
+    <p>Data container: @containersInfo.DataContainerUri</p>
+    <p>Metadata container: @containersInfo.MetadataContainerUri</p>
+
+    <p>Encryption key: @containersInfo.EncryptionKey </p>
+
+    <p>Data account name: @dataUrlParts[0]</p>
+    <p>Data container name: @dataUrlParts[1]</p>
+    <p>Data SAS-token: @dataUrlParts[2]</p>
+
+    <p>Metadata account name: @metadataUrlParts[0]</p>
+    <p>Metadata container name: @metadataUrlParts[1]</p>
+    <p>Metadata SAS-token: @metadataUrlParts[2]</p>
+
+    <p>Queue: @queueInfo.JobQueueUri</p>
+
+    <button class="btn btn-primary" @onclick="UploadAllFiles">Upload Files</button>
+    <br />
+
+    <button class="btn btn-primary" @onclick="CreateJob">Start !</button>
+    <br />
+
+    <p>Job ID: @jobId</p>
+}
+
+@if (!string.IsNullOrEmpty(jobId))
+{
+    <button class="btn btn-primary" @onclick="GetStatus">Get Status</button>
+
+    if (progress != null)
+    {
+        foreach (var log in progress.Logs)
+        {
+            <ul>@log</ul>
+        }
+    }
+}
+
+@code {
+
+    private string inputText = "itm8collab2";
+
+    private PnPContext context;
+
+    protected async Task Authenticate()
+    {
+        context = await PnPContextFactory.CreateAsync(new Uri($"https://{inputText}.sharepoint.com/sites/migration-a"));
+        var web = await context.Web.GetAsync();
+        Console.WriteLine(web.Title);
+    }
+
+    private ProvisionedMigrationContainersInfo containersInfo;
+    private ProvisionedMigrationQueueInfo queueInfo;
+    private string[] dataUrlParts;
+    private string[] metadataUrlParts;
+    EncryptionOption options = new();
+
+    string jobId = "";
+
+    MigrationJobProgress progress;
+
+    protected async Task GetStatus()
+    {
+        using (var clientContext = PnPCoreSdk.Instance.GetClientContext(context))
+        {
+            var jobProgress = clientContext.Site.GetMigrationJobProgress(new Guid(jobId), "0");
+
+            await clientContext.ExecuteQueryAsync();
+
+            progress = jobProgress.Value;
+        }
+    }
+
+    protected async Task StartMigration()
+    {
+        using (var clientContext = PnPCoreSdk.Instance.GetClientContext(context))
+        {
+            var containers = clientContext.Site.ProvisionMigrationContainers();
+            var queue = clientContext.Site.ProvisionMigrationQueue();
+
+            await clientContext.ExecuteQueryAsync();
+
+            containersInfo = containers.Value;
+            dataUrlParts = GetUrlParts(containersInfo.DataContainerUri);
+            metadataUrlParts = GetUrlParts(containersInfo.MetadataContainerUri);
+            queueInfo = queue.Value;
+
+            options.AES256CBCKey = containers.Value.EncryptionKey;
+        }
+    }
+
+
+    protected async Task CreateJob()
+    {
+        using (var clientContext = PnPCoreSdk.Instance.GetClientContext(context))
+        {
+            var job = clientContext.Site.CreateMigrationJobEncrypted(new Guid("7f635d35-1fea-4f42-8533-b2b608ce9023"), containersInfo.DataContainerUri, containersInfo.MetadataContainerUri, queueInfo.JobQueueUri, options);
+
+            await clientContext.ExecuteQueryAsync();
+
+            jobId = job.Value.ToString();
+        }
+    }
+
+    protected string[] GetUrlParts(string url)
+    {
+
+        // Decode HTML entities
+        url = HttpUtility.HtmlDecode(url);
+
+        Uri uri = new Uri(url);
+
+        string hostPrefix = uri.Host.Split('.')[0];
+        string blobName = uri.AbsolutePath.TrimStart('/');
+        string query = uri.Query.TrimStart('?');
+
+        return new string[3] { hostPrefix, blobName, query };
+    }
+
+    protected async Task UploadAllFiles()
+    {
+        await UploadFiles("Export-OneDrive-Users.csv", @"C:\Mig\Export-OneDrive-Users.csv", new Uri(containersInfo.DataContainerUri));
+        await UploadFiles("Manifest.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\Manifest.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("SystemData.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\SystemData.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("Requirements.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\Requirements.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("UserGroup.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\UserGroup.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("ExportSettings.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\ExportSettings.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("LookupListMap.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\LookupListMap.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("RootObjectMap.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\RootObjectMap.xml", new Uri(containersInfo.MetadataContainerUri));
+        await UploadFiles("ViewFormsList.xml", @"C:\Users\nibrs\OneDrive - itm8\PowerShell\MigrationTest\ViewFormsList.xml", new Uri(containersInfo.MetadataContainerUri));
+
+    }
+
+    protected async Task UploadFiles(string blobName, string filePath, Uri containerUri)
+    {
+ 
+        // Generate AES key and IV (replace with actual key from ProvisionMigrationContainers)
+        byte[] aesKey = options.AES256CBCKey;
+        byte[] iv = GenerateIV();
+
+        // Encrypt file
+        byte[] encryptedContent = EncryptFile(filePath, aesKey, iv);
+
+        // Upload encrypted file
+        BlobContainerClient containerClient = new BlobContainerClient(containerUri);
+        BlobClient blobClient = containerClient.GetBlobClient(blobName);
+
+        using (MemoryStream ms = new MemoryStream(encryptedContent))
+        {
+            await blobClient.UploadAsync(ms, overwrite: true);
+        }
+
+        // Set IV metadata
+        await blobClient.SetMetadataAsync(new System.Collections.Generic.Dictionary<string, string>
+        {
+            { "IV", Convert.ToBase64String(iv) }
+        });
+
+        // Create snapshot
+        var snapshot = await blobClient.CreateSnapshotAsync();
+        BlobClient snapshotClient = blobClient.WithSnapshot(snapshot.Value.Snapshot);
+        Console.WriteLine("Snapshot created: " + snapshotClient.Uri);
+    }
+
+    static byte[] GenerateIV()
+    {
+        using (Aes aes = Aes.Create())
+        {
+            aes.GenerateIV();
+            return aes.IV;
+        }
+    }
+
+    static byte[] EncryptFile(string filePath, byte[] key, byte[] iv)
+    {
+        using (Aes aes = Aes.Create())
+        {
+            aes.Key = key;
+            aes.IV = iv;
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+
+            using (FileStream fsInput = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+            using (MemoryStream msOutput = new MemoryStream())
+            using (CryptoStream cs = new CryptoStream(msOutput, aes.CreateEncryptor(), CryptoStreamMode.Write))
+            {
+                fsInput.CopyTo(cs);
+                cs.FlushFinalBlock();
+                return msOutput.ToArray();
+            }
+        }
+    }
+
+}
